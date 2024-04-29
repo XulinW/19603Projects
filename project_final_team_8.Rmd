@@ -1,0 +1,1154 @@
+---
+title: 'Final Group Project: Spotify Analysis'
+author: 'Team 8: Nicole Ma; Chenwen Dong; Xulin Wang; Fei Xia; Hanying Qiao'
+date: "`r Sys.Date()`"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+# 1. Introduction
+
+**Exploring the Dynamics of Music Popularity and Genre Classification
+Through Spotify's Audio Features**
+
+This document includes all the code and visualizations used in our
+analysis.
+
+# 2. Research question
+
+**Research Question:** In our daily lives, we are constantly immersed in
+a diverse array of music. We are wondering - Can the
+[popularity]{.underline} and [genre of a song]{.underline} be accurately
+predicted based on its audio features using data from the Spotify API?
+We believe the analysis can offer insights into musical trends, enabling
+the industry to adapt and innovate proactively.
+
+-   [Objective 1:]{.underline} Predict song popularity by audio features
+    from Spotify data
+-   [Objective 2:]{.underline} Predict song genres by audio features
+    from Spotify data
+
+**Assumption:** [Quantifiable Audio Features:]{.underline} For music
+related data analysis, one of the biggest problems historically has
+simply been a way to quantify music, but Spotify has been leading the
+way detailing the audio features.
+
+# 3. Spotify Dataset
+
+The Spotify Database API provides a comprehensive dataset, encompassing
+a wide array of audio features for songs. This dataset is ideal for our
+objectives due to several reasons:
+
+1.  **Free API:** The Spotify API is freely accessible to developers.
+2.  **Diverse Data Points:** Spotify has data of thousands of tracks
+    spanning various genres, offers a rich foundation for our analysis
+3.  **Reliable Popularity Metric:** Spotify's popularity score is
+    derived from actual user engagement, offering a tangible metric for
+    song success.
+
+For data downloading part, we are using Python API to access Spotify
+data, please refer to [Spotify_Download_API.ipynb]{.underline} for more
+details.
+
+At the heart of our investigation are two primary dimensions: the
+popularity of tracks and their genres.
+
+-   [**Popularity:**]{.underline} The value will be between 0 and 100,
+    with 100 being the most popular. The popularity is calculated by
+    Spotify algorithm and is based, in the most part, on the total
+    number of plays the track has had and how recent those plays are.
+    Given the left-skewed distribution, with a vast majority of tracks
+    clustering at the lower end, we define tracks with a popularity
+    score greater than 16 as "popular".
+
+-   [**Genre:**]{.underline} Our dataset encompasses approximately 1000
+    tracks each from six distinct genres (total \~6k track data):
+    Electronic, Hip-hop, Jazz, Pop, Country, and Rock.
+
+-   [**Other Audio features:**]{.underline}
+
+1.  [Acousticness:]{.underline} A measure on a scale from 0 to 1
+    indicating the acoustic nature of a track.
+
+2.  [Danceability:]{.underline} A metric assessing how suitable a track
+    is for dancing.
+
+3.  [Energy:]{.underline} Reflects the intensity and activity of a
+    track.
+
+4.  [Instrumentalness:]{.underline} Indicates the presence of
+    instrumental sounds in a track.
+
+5.  [Liveness:]{.underline} Differentiates live recordings from studio
+    productions.
+
+6.  [Loudness:]{.underline} Measures the overall decibel level of a
+    track.
+
+7.  [Speechiness:]{.underline} Quantifies the spoken word content in a
+    track.
+
+8.  [Tempo:]{.underline} The speed at which a piece of music is played,
+    measured in beats per minute (BPM).
+
+9.  [Time Signature:]{.underline} Describes how beats in a song are
+    grouped, contributing to the song's rhythm.
+
+10. [Key:]{.underline} Identifies the tonal center and harmonic
+    foundation of a track.
+
+11. [Valence:]{.underline} Measures the musical positiveness conveyed by
+    a track.
+
+# 4. Data Loading
+
+## Load Packages
+
+```{r,warning=FALSE, message= FALSE}
+library(readr)
+library(tidyverse)
+library(ggplot2)
+library(gridExtra)
+library(corrplot)
+
+library(dplyr)
+library(tidyr)
+library(caret)
+library(rpart)
+
+library(randomForest)
+library(e1071)
+library(nnet)
+library(kernlab)
+```
+
+## Load Dataset
+
+```{r, warning=FALSE, message = F}
+data <- read.csv("total.csv", stringsAsFactors = FALSE)
+```
+
+# 5. Data Pre-processing
+
+## Check if there are duplicate Track in our dataset
+
+```{r}
+
+duplicates <- duplicated(data$track_id)
+num_duplicates <- sum(duplicates)
+cat("Number of duplicates in 'track_id' column:", num_duplicates, "\n")
+
+if(num_duplicates > 0) {
+  duplicate_rows <- data[duplicates, ]
+  cat("Duplicate rows based on track_id:\n")
+  print(duplicate_rows)
+} else {
+  cat("No duplicate rows based on track_id found.\n")
+}
+```
+
+## Check Missing Values
+
+```{r}
+n_df <- nrow(data)  
+
+for(col in colnames(data)) {
+  missing <- sum(is.na(data[[col]])) 
+  mis_perc <- (missing / n_df) * 100
+  
+  cat(sprintf("The missing percentage of %s is %.2f%%\n", col, mis_perc))
+}
+```
+
+## Feature Distribution
+
+```{r}
+df_features = subset(data, select = -c(Album,Release_date,Artist,album_id,Name,track_id,Popularity) )
+df_features <- na.omit(df_features)
+
+n_rows <- nrow(df_features)
+n_cols <- ncol(df_features)
+cat("There are", n_rows, "rows and", n_cols, "columns\n")
+
+summary_df <- t(summary(df_features))
+cols <- colnames(df_features)
+print(summary_df)
+```
+
+\*To address our two primary research objectives, we have systematically
+structured our approach into EDA (visualization), feature selection and
+modeling. Each phase is conducted separately for both objectives.
+
+# **6. Objective 1:** Predict song popularity by audio features from Spotify data
+
+## 6.1. EDA
+
+### 6.1.1. Predict Varibales Distribution
+
+```{r warning=FALSE}
+df_y=data$Popularity
+summary_dfy <- t(summary(df_y))
+cols <- colnames(df_y)
+print(summary_dfy)
+
+# Calculate the mean of popularity by different genres
+mean_by_category <- data %>%
+                    group_by(genre) %>%
+                    summarise(mean_value = mean(Popularity, na.rm = TRUE))
+
+# number of rows in each genre
+rows <- data %>%  count(genre)
+
+print(mean_by_category)
+print(rows)
+
+# Plot distributions of numerical features
+hist(df_y, col = "#ADD8E6",main="Distribution of Popularity", xlab="Popularity")
+
+
+
+
+# Separate histograms for each genre
+# make genre as factor
+data$genre <- as.factor(data$genre)
+
+ggplot(data, aes(x = Popularity, fill = genre)) + 
+  geom_histogram(position = "dodge", bins = 30) + 
+  theme_minimal() + 
+  labs(x = "Popularity", y = "Count", title = "Distribution of Popularity by Genre") +
+  theme(legend.position = "bottom")
+
+
+ggplot(data = data) +stat_count ( aes(x= ifelse(data$Popularity > 16, "Yes", "No")) ,  fill = "lightblue", width = 0.3)+
+labs(title = "Distribution of Popularity Greater than Avg",x = "Is Popularity Greater than Avg")
+```
+
+### 6.1.2. Feature Distribution Visualization
+
+```{r}
+# Filter cols to include only numeric columns to avoid errors in plotting
+numeric_cols <- sapply(df_features, is.numeric)
+cols <- names(df_features)[numeric_cols]
+
+
+par(mfrow = c(3, 2))
+
+# Loop through the numeric columns and create plots
+for (col in cols) {
+  # Histogram plot
+  hist(df_features[[col]], main = paste("Histogram of", col), xlab = col, col = "lightblue", border = "white")
+  
+  # Q-Q plot
+  qqnorm(df_features[[col]], main = paste("Q-Q Plot of", col))
+  qqline(df_features[[col]], col = "red")
+}
+
+```
+
+### 6.1.3. Check Correlation
+
+```{r, fig.width=10, fig.height=8}
+library(corrplot) 
+numeric_df <- df_features[sapply(df_features, is.numeric)]
+correlation_mat <- cor(numeric_df, use = "complete.obs")
+corrplot(correlation_mat, method = "color", type = "lower", # Focusing on the lower triangle
+         order = "hclust",
+         addCoef.col = "black",
+         tl.col = "black", tl.srt = 45,
+         diag = FALSE,
+         na.label = "",
+         col = colorRampPalette(c("blue", "white", "red"))(200),
+         title = "Correlation Matrix"
+         )
+
+```
+
+According to the correlation diagram, we found that the energy column
+has the high correlation with other variables, and we decide to drop it.
+
+```{r}
+#drop energy
+numeric_df <- numeric_df[, !(names(numeric_df) %in% c("Energy"))]
+```
+
+## 6.2 Regression: Feature Selection
+
+```{r}
+library(caret)
+
+set.seed(123) 
+
+X_scaled <- as.data.frame(scale(numeric_df))
+y <- df_y 
+
+scale <- data.frame(X_scaled, Popularity = y)
+
+control <- rfeControl(functions=lmFuncs, method="cv", number=10)
+
+results <- rfe(x=scale[, -ncol(scale)], y=scale$Popularity, sizes=1:ncol(scale[, -ncol(scale)]), rfeControl=control)
+
+plot(results, type=c("o", "g"))
+```
+
+Select the best Variables
+
+```{r}
+# The best subset of variables is in
+bestVars <- results$optVariables
+print(bestVars)
+```
+
+## 6.3 Regression: Build Model
+
+```{r}
+finalModel <- lm(Popularity ~ ., data=data[, c(bestVars, "Popularity")])
+# Summary of the final model
+summary(finalModel)
+```
+
+Our first linear regression model. The minimum residual is -30.267, and
+the maximum is 74.447 The Adjusted R-squared is really low. This model
+does not have a high predictive power,an alternative models is need for
+research.
+
+## 6.4 Classification: Feature Selection
+
+Our Classification model mutates popularity base on its average. If a
+popularity value is greater than 16(the average of the variable), it
+returns a 1. If it is smaller than 16, it returns a 0.
+
+**Add if_popularity, should return 1 and 0s**
+
+```{r}
+df_y2 <- as.data.frame(as.factor(ifelse(data$Popularity > 16, 1, 0)))
+names(df_y2)[names(df_y2) == "as.factor(ifelse(data$Popularity > 16, 1, 0))"] <- "popularity_01"
+df_features2=subset(df_features, select = -c(genre))
+df_model <- cbind(df_y2, df_features2)
+```
+
+Before building models, we identify the most relevant features for
+predicting our target variable. This will take roughly 10min to run.
+
+```{r RF-Feature Selection}
+library(caret)
+set.seed(123)  
+
+# Train a Random Forest model to assess feature importance
+control = trainControl(method = "cv", number = 5)
+model <- train(popularity_01~., data=df_model, method="rf", importance=TRUE, trControl = control)
+
+# Plot the variable importance
+# Extracting variable importance
+importance <- varImp(model, scale=FALSE)
+
+# Plotting variable importance
+plot(importance)
+```
+
+This chunk runs on High CPU occupation
+
+```{r Boruta}
+library(randomForest)
+library(Boruta)
+# Run Boruta
+set.seed(123)  # For reproducibility
+boruta_output <- Boruta(popularity_01 ~ ., data = df_model, doTrace = 0)
+
+# Print the results
+print(boruta_output)
+
+# Plot the results for visualization
+plot(boruta_output, cex.axis=.7, las=2, xlab="", main="Variable Importance")
+
+# Get the final decision of which variables were confirmed as important
+final_vars <- getSelectedAttributes(boruta_output, withTentative = FALSE)
+
+
+
+```
+
+List all the improtant varibles
+
+```{r}
+final_vars_with_target <- c("popularity_01", final_vars)
+selected_features_df <- df_model[, final_vars_with_target]
+print(final_vars)
+```
+
+## 6.5 Classification: Build Model
+
+Describe the models you have built, including any assumptions or choices
+made in the process.
+
+### 6.5.1. Model 1: Random Forest
+
+```{r}
+# Split the data into training and testing sets
+index <- createDataPartition(selected_features_df$popularity_01, p=0.8, list=FALSE)
+trainData <- selected_features_df[index, ]
+testData <- selected_features_df[-index, ]
+
+param_grid <- expand.grid(mtry = c(2, 4, 6) )
+
+# Model 1: Random Forest
+rfModel <- train(popularity_01 ~ ., data=trainData,method = "rf", trControl = trainControl(method = "cv", number = 5), tuneGrid = param_grid , ntree = 200)
+rfModel$bestTune
+rfModel <- rfModel$finalModel
+
+rfPredictions <- predict(rfModel, newdata=testData)
+rfConfMatrix <- confusionMatrix(rfPredictions, testData$popularity_01)
+print("Random Forest Model Results:")
+print(rfConfMatrix)
+```
+
+Overall, the model demonstrates reasonably good performance in terms of
+overall accuracy, but there are notable differences in performance
+between sensitivity and specificity, indicating potential future
+direction of analysis. This also result the balanced accuracy to be
+relatively low compare to the accuracy.
+
+### 6.5.2. Model 2: Generalized Linear Model
+
+```{r}
+library(boot)
+iindex <- createDataPartition(df_model$popularity_01, p=0.8, list=FALSE)
+trainData <- df_model[index, ]
+testData <- df_model[-index, ]
+
+glmFit <- function(data, indices) {
+  fit <- glm(popularity_01 ~ ., data=data[indices, ], family=binomial())
+  return(fit)
+}
+
+glmModel <- glm(popularity_01 ~ ., data=trainData, family=binomial())
+cvResults <- cv.glm(trainData, glmModel, K=10)
+
+
+glmPredictions <- predict(glmModel, newdata=testData, type="response")
+glmPredictionsClass <- ifelse(glmPredictions > 0.5, 1, 0)
+glmConfMatrix <- confusionMatrix(as.factor(glmPredictionsClass), testData$popularity_01)
+
+print(glmConfMatrix)
+```
+
+the GLM model exhibits similar patterns to the Random Forest model, with
+relatively good sensitivity but lower specificity which indicates a
+tendency to correctly identify positive instances but struggles with
+accurately identifying negatives.
+
+## 6.6 Model Selection
+
+```{r}
+
+# Random Forest Metrics
+rfAccuracy <- rfConfMatrix$overall['Accuracy']
+rfSensitivity <- rfConfMatrix$byClass['Sensitivity']
+rfSpecificity <- rfConfMatrix$byClass['Specificity']
+rfBalanced = rfConfMatrix$byClass['Balanced Accuracy']
+# GLM Metrics
+glmAccuracy <- glmConfMatrix$overall['Accuracy']
+glmSensitivity <- glmConfMatrix$byClass['Sensitivity']
+glmSpecificity <- glmConfMatrix$byClass['Specificity']
+glmBalanced = glmConfMatrix$byClass['Balanced Accuracy']
+# Print the metrics
+print(paste("Random Forest Accuracy:", rfAccuracy))
+print(paste("Random Forest Sensitivity:", rfSensitivity))
+print(paste("Random Forest Specificity:", rfSpecificity))
+print(paste("Random Forest Balanced Accuracy:", rfBalanced))
+print(paste("GLM Accuracy:", glmAccuracy))
+print(paste("GLM Sensitivity:", glmSensitivity))
+print(paste("GLM Specificity:", glmSpecificity))
+print(paste("GLM Balanced Accuracy:", glmBalanced))
+
+
+```
+
+```{r}
+library(pROC)
+
+# Random Forest AUC
+rfProbabilities <- predict(rfModel, newdata=testData, type="prob")
+rfROC <- roc(response=testData$popularity_01, predictor=rfProbabilities[,2])
+rfAUC <- auc(rfROC)
+
+# GLM AUC
+glmProbabilities <- predict(glmModel, newdata=testData, type="response")
+glmROC <- roc(response=testData$popularity_01, predictor=glmProbabilities)
+glmAUC <- auc(glmROC)
+
+# Print AUC values
+print(paste("Random Forest AUC:", rfAUC))
+print(paste("GLM AUC:", glmAUC))
+print(glmROC)
+
+data_for_plot =  data.frame(Model = c("Random Forest", "Generalized Linear Model"),
+ Accuracy = c(rfAccuracy,glmAccuracy), BAAccuracy = c(rfBalanced,glmBalanced), AUC = c(auc(rfROC), auc(glmROC) ) )  
+df_long <- pivot_longer(data_for_plot, cols = c(Accuracy, BAAccuracy, AUC), names_to = "Metric", values_to = "Value")
+ggplot(df_long, aes(x = Model, y = Value, fill = Metric)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(x = "Model", y = "Metric Value", title = "Model Performance Metrics") +
+  scale_fill_manual(values = c("Accuracy" = "coral2", "BAAccuracy" = "steelblue", "AUC" = "purple"))
+
+```
+
+```{r}
+# Summary for GLM model
+summary(glmModel)
+```
+
+Length, Acousticeness, Danceability, Instrumentalness, Liveness,
+Loudness, Time_Signature and valence are important predictors of the
+outcome variable.
+
+## 6.7 Other features
+
+```{r}
+# Assuming logistic regression model
+
+# Calculating fitted probabilities
+fittedProbabilities <- predict(glmModel, type = "response")
+# Extracting deviance residuals
+devianceResiduals <- residuals(glmModel, type = "deviance")
+
+
+# Plotting deviance residuals against fitted probabilities
+ggplot() +geom_point(aes( x = fittedProbabilities, y = devianceResiduals)) + geom_abline(h= 0,slope = 0, col= "red")+ggtitle("Deviance Residual")
+
+
+```
+
+This plot can reveal patterns in the residuals, indicating potential
+issues with the model. We can see the as the fitted probability grows,
+the model has a lower positive residual, which means the model is better
+on the assignment on predicting positive class (1). But when as the
+fitted probability grows, the negative residual also grows. Indicating
+the model is not doing well on predicting negative class (0).
+
+## 6.8 Results Analysis
+
+Discuss the results of your models, including any important metrics and
+how they compare to your objectives.
+
+```{r}
+model_metrics <- data.frame(
+  Model = c(rep("Random Forest", 2), rep("Generalized Linear Model", 2)),
+  Metric = c(rep(c("Sensitivity", "Specificity"), 2)),
+  Value = c(rfSensitivity, rfSpecificity, glmSensitivity, glmSpecificity))
+ggplot(model_metrics, aes(x = Model, y = Value, fill = Metric)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = " Sensitivity vs. Specificity", y = "Metric Value")+ 
+  scale_fill_manual(values = c("Sensitivity" = "coral2", "Specificity" = "purple"))
+```
+
+Our model has a high Sensitivity but a low specificity. It indicates
+that the model is good at correctly identifying positive cases but tends
+to incorrectly classify negative cases as positive. Apply to our case,
+the model is good at predicting popular songs but it's falsely
+identifying less popular songs with high popularity. The model has a
+decent accuracy and AUC which indicates certain strengths of it. We need
+to further refine the model to achieve a better balance between
+sensitivity and specificity. This could involve adjusting the model's
+threshold, feature selection, or gathering more balanced datasets.This
+also makes sense because less popular song are indeed more prevalent
+than hit songs. For important varibles: Length, Acousticeness,
+Danceability, Instrumentalness, Liveness, Loudness, Time_Signature, Some
+of them are very intuitive; Song with more danceability and liveness
+indicate a certain feature of Pop and electronic songs, and popularity
+is literally the definition of pop songs. Loudness and liveness are the
+key feature of Rock and hip-hop songs. Most importantly, Length is a key
+feature of all songs in the streaming age. A song with longer duration
+tends to have less streams (fast paced world).
+
+A Reasonable doubt: we have many 0s and low popularity values in the
+dataset. In fact, the dataset is not balanced, and the number of tracks
+with popularity values smaller than the average is much higher than the
+number of tracks with higher popularity. Class imbalance occurs when one
+class (in this case, tracks with lower popularity) is significantly more
+prevalent than another class.
+
+# **7. Objective 2: Predict song genres by audio features from Spotify data**
+
+```{r,warning=FALSE}
+
+# for the year column, mostly of raw data is in the format of m/d/yyyy, however, some tracks have only release year
+# to make it consistent,we only extract the release year
+data$Release_year <- sub(".*([0-9]{4})$", "\\1", data$Release_date)
+data$Release_year <- as.numeric(data$Release_year)
+#make genre a factor
+genre_data = data[ , 7:21]
+genre_data$genre <- as.factor(genre_data$genre)
+genre_data = select(genre_data, - Popularity)
+str(genre_data)
+```
+
+## 7.1 EDA
+
+Firstly, I try to visualize the distribution of audio features across
+different music genres using **box plots**.
+
+```{r,message=FALSE, warning=FALSE}
+music_data_long <- pivot_longer(genre_data,
+                                cols = c(Length, Release_year,Tempo, Time_signature),
+                                names_to = "Feature",
+                                values_to = "Value")
+
+ggplot(music_data_long, aes(x = genre, y = Value, fill = genre)) +
+  geom_boxplot() +
+  facet_wrap(~ Feature, scales = "free", ncol = 4) +
+  theme_light() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        strip.text.x = element_text(size = 8)) +
+  labs(title = "Distribution of Audio Features by Genre",
+       x = "Genre", y = "Value")
+
+```
+
+**Length:** Electronic music (yellow) has the highest median song
+length, indicating that it typically has longer tracks. Country has the
+most outliers above the upper whisker, highlighting the presence of
+significantly longer tracks in this genre.
+
+**Release_year:** The IQR for electronic (yellow) is the most compact,
+indicating less variation in the release years, while rock (pink) has a
+broader IQR, indicating more diversity in the release years of its
+tracks.Rock (pink) reaches back to the earliest years, indicating a
+history of older releases in this genre.
+
+**Tempo:** The median tempo is similar across genres, but electronic
+(yellow) and rock (pink) have slightly higher median tempos, which could
+indicate a tendency for these genres to have faster beats. And
+electronic (yellow) has a narrower IQR, indicating more consistency in
+tempo.
+
+**Time_signature:** The median for all genres appears to be 4,
+indicating a standard beat pattern across genres. The IQR for all genres
+is very narrow or non-existent. The absence of outliers indicates that
+it is rare for songs in these genres to deviate from the common 4/4 time
+signature.
+
+```{r}
+music_data_long <- pivot_longer(genre_data,
+                                cols = c(Acousticness, Instrumentalness,
+                                         Liveness, Speechiness),
+                                names_to = "Feature",
+                                values_to = "Value")
+
+ggplot(music_data_long, aes(x = genre, y = Value, fill = genre)) +
+  geom_boxplot() +
+  facet_wrap(~ Feature, scales = "free", ncol = 4) +
+  theme_light() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        strip.text.x = element_text(size = 8)) +
+  labs(title = "Distribution of Audio Features by Genre",
+       x = "Genre", y = "Value")
+```
+
+**Acousticness:** Jazz (light blue) has the highest median, indicating
+that on average, jazz songs have a higher degree of acousticness.
+Electronic (yellow) has the lowest median, suggesting that electronic
+music typically has less acoustic sound. Electronic music have a
+narrower IQR, suggesting more consistency in their levels of
+acousticness.
+
+**Instrumentalness:** The jazz genre has a large IQR, showing a broad
+range of instrumentalness, suggesting varying levels of instrumental
+elements in jazz music. Rock and country exhibit a significant number of
+outliers, emphasizing tracks that are predominantly instrumental.
+
+**Liveness:** The IQR is narrow for all genres, with rock (pink) being
+slightly wider, indicating a modest variation in the live aspect of
+their tracks. There are a few outliers, particularly in jazz and
+country, showing some tracks with higher liveness.
+
+**Speechiness:** Hip-hop (green) has the highest median, which is
+expected due to the spoken word element of the genre. Hip-hop has a wide
+IQR, indicating a range of speechiness, from songs with more
+instrumental parts to those with spoken words. Also, Hip-hop shows the
+longest whiskers, reflecting a broad spread of speechiness in the genre.
+
+```{r}
+music_data_long <- pivot_longer(genre_data,
+                                cols = c(Danceability, Energy, Loudness,valence),
+                                names_to = "Feature",
+                                values_to = "Value")
+
+ggplot(music_data_long, aes(x = genre, y = Value, fill = genre)) +
+  geom_boxplot() +
+  facet_wrap(~ Feature, scales = "free", ncol = 4) +
+  theme_light() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        strip.text.x = element_text(size = 8)) +
+  labs(title = "Distribution of Audio Features by Genre",
+       x = "Genre", y = "Value")
+```
+
+**Danceability:** Hip-hop (green) has the highest median, indicating its
+songs are generally the most danceable. Rock (pink) has the lowest
+median, suggesting it is less danceable on average than other genres.
+The whiskers indicate the overall range of danceability, with hip-hop
+showing a broad spread, indicating diversity in this aspect.
+
+**Energy:** Jazz have lower median value, which suggests this genre'
+songs are typically much less energetic. There are outliers for several
+genres, with electronic (yellow) showing songs with particularly low
+energy levels.
+
+**Loudness:** The median loudness levels are fairly central across all
+genres, with jazz (light blue) slightly higher, implying it tends to
+quieter. Jazz again shows a wide IQR, suggesting a varied loudness range
+within the genre.
+
+**valence:** Pop (purple) has one of the highest median valence scores,
+suggesting its songs often have a more positive mood. In contrast,
+electronic (yellow) has a lower median, indicating a generally less
+positive mood.
+
+After exploring the relationship between single feature and genre, now
+we aim to investigate future the relationships between pairs of audio
+features across different music genres by **scatter plot**.
+
+The plots are designed to uncover potential interaction effects that
+could be important for data engineering in the following section.
+
+```{r}
+ggplot(genre_data, aes(x = Danceability, y = Energy, color = genre)) +
+  geom_point(alpha = 0.6) +
+  facet_wrap(~ genre, scales = "free") +
+  theme_light() +
+  labs(title = "Danceability vs. Energy by Genre", 
+       x = "Danceability", y = "Energy")
+
+ggplot(genre_data, aes(x = Acousticness, y = Instrumentalness, color = genre)) +
+  geom_point(alpha = 0.6) +
+  facet_wrap(~ genre, scales = "free") +
+  theme_light() +
+  labs(title = "Acousticness vs. Instrumentalness by Genre", 
+       x = "Acousticness", y = "Instrumentalness")
+
+ggplot(genre_data, aes(x = Speechiness, y = valence, color = genre)) +
+  geom_point(alpha = 0.6) +
+  facet_wrap(~ genre, scales = "free") +
+  theme_light() +
+  labs(title = "Speechiness vs. valence by Genre", 
+       x = "Speechiness", y = "valence")
+
+```
+
+-   **Danceability vs. Energy by Genre**
+
+    High danceability and energy levels are often associated with more
+    upbeat and fast-paced music.
+
+    Electronic and Hip-hop music are often designed for dancing and tend
+    to have higher danceability and energy levels.
+
+-   **Acousticness vs. Instrumentalness**
+
+    These features can help differentiate genres known for live
+    instrumentation from those that are more electronic or vocal-heavy.
+
+    Jazz exhibits higher levels of acousticness and instrumentalness,
+    reflecting the genre's reliance on acoustic instruments and
+    instrumental solos.
+
+-   **Speechiness vs. Valence**
+
+    We think it will be interesting to explore genres that feature more
+    lyrical content with varying emotional tones.
+
+    Hip-hop is distinguished by its use of spoken words, resulting in
+    higher speechiness levels. The valence in hip-hop can vary widely,
+    reflecting the diverse emotional tones explored in the lyrics. In
+    contrast, Jazz and Electronic music might show lower speechiness.
+
+## 7.2 Data Pre-processing
+
+### 7.2.1 Data Engineering
+
+Based on the scatter plots above, we create three new features.
+
+```{r}
+
+#Energy and Danceability:
+genre_data$Energy_Danceability_Interaction <- 
+  genre_data$Energy * genre_data$Danceability
+
+#Acousticness and Instrumentalness
+genre_data$Acousticness_Instrumentalness_Interaction <- 
+  genre_data$Acousticness * genre_data$Instrumentalness
+
+
+#Speechiness and Valence: 
+genre_data$Speechiness_Valence_Interaction <- 
+  genre_data$Speechiness * genre_data$valence
+
+```
+
+### 7.2.2 Normalization
+
+Because of potential classification methods in the following parts (e.g.
+SVM), we scale numerical features to a standard range.
+
+The normalization formula used is **(x - min(x)) / (max(x) - min(x))**,
+which scales the data to a **[0, 1]** range.
+
+Part of audio features have already in the format of [0,1], therefore,
+we only need to normalize the remaining numeric features.
+
+```{r}
+# Normalizing selected features
+features_to_normalize <- c("Loudness", "Tempo", "Time_signature", 
+                           "key", "Release_year", "Length",
+                           "Energy_Danceability_Interaction",
+                           "Acousticness_Instrumentalness_Interaction",
+                           "Speechiness_Valence_Interaction")
+
+genre_data[features_to_normalize] <- 
+  as.data.frame(lapply(
+    genre_data[features_to_normalize], 
+    function(x) (x - min(x, na.rm = TRUE)) / 
+      (max(x, na.rm = TRUE) - min(x, na.rm = TRUE))))
+
+head(genre_data)
+```
+
+## 7.3 Feature Selection
+
+We would like to conduct model-based selection.
+
+**Decision tree** usually works as a starting point for classification
+model.
+
+```{r}
+#split into training and testing sets to evaluate model performance.
+index <- createDataPartition(genre_data$genre, p = 0.8, list = FALSE)
+traindata <- genre_data[index, ]
+testdata <- genre_data[-index, ]
+```
+
+```{r}
+
+#Decision tree
+dt_model <- rpart(genre ~ ., data = traindata, method = "class")
+dt_predictions <- predict(dt_model, newdata = testdata, type = "class")
+
+# Evaluating model performance
+confusionMatrix(dt_predictions, testdata$genre)
+
+# Extracting feature importance
+importance <- dt_model$variable.importance
+importance_df <- data.frame(Feature = names(importance), Importance = importance)
+importance_df <- importance_df[order(-importance_df$Importance),]
+
+# Visualizing the feature importance
+ggplot(importance_df, aes(x = reorder(Feature, Importance), y = Importance)) +
+  geom_col(fill = "lightblue") +
+  coord_flip() + 
+  theme_minimal() +
+  labs(title = "Feature Importance - Decision Tree", x = "Feature", y = "Importance") +
+  theme(axis.text.y = element_text(angle = 45)) 
+
+
+```
+
+This horizontal bar chart shows the relative importance of different
+features as determined by a decision tree model used for genre
+classification. From the evaluation matrix, we see the decision tree
+model shows some ability to predict genres beyond random guessing or
+always choosing the most common genre, and there is definitely room for
+improvement.
+
+Based on above feature importance table, it seems like
+**Time_signature**, **Liveness**, **Tempo** and **Release_year** are the
+least important features.
+
+Dropping less important features can help simplify our model.
+
+```{r}
+
+set.seed(123)
+train_data_updated <- 
+  traindata[, 
+             !(names(traindata) %in% c("Time_signature", "Liveness", "Tempo","Release_year"))]
+
+test_data_updated <- 
+  testdata[, 
+            !(names(testdata) %in% c("Time_signature", "Liveness", "Tempo","Release_year"))]
+
+```
+
+## 7.4 Build Model
+
+**Potential Model Choices:** Random Forest; Support Vector Machine;
+Neural Network
+
+**Random Forest:** Chosen for its ability to handle large data sets with
+many features without overfitting. Its ensemble approach, which
+aggregates predictions from multiple decision trees, makes it robust
+against noisy data.
+
+**Support Vector Machine (SVM):** Preferred for its effectiveness in
+high-dimensional spaces, which is typical for our dataset containing
+various audio features. SVM is capable of defining complex decision
+boundaries, making it suitable for distinguishing between multiple
+genres.
+
+**Neural Network:** Selected for its deep learning capabilities, which
+allow it to learn complex patterns in data. This is particularly useful
+in our case where the relationship between audio features and genres can
+be non-linear and intricate.
+
+```{r CV}
+# Set up cross-validation settings
+
+control <- trainControl(method = "cv", number = 5, 
+                        savePredictions = "final",
+                        verboseIter = FALSE, 
+# for final output, we dont need to print out detailed step information
+                        search = "grid")  # parameter tuning method
+```
+
+### 7.4.1. Model 1: Random Forest
+
+```{r RF}
+
+# Define the tuning grid for mtry only
+tuneGrid <- expand.grid(
+  mtry = c(2, 3, 4, 5)
+)
+
+
+# Train the Random Forest model with tuning for mtry and a fixed ntree value
+rf_model <- train(
+  genre ~ ., 
+  data = train_data_updated, 
+  method = "rf",
+  trControl = control,
+  tuneGrid = tuneGrid,
+  ntree = 500,  
+  # Set a fixed number of trees 
+  # we have tried different ntree, but 500 works most stable
+  metric = "Accuracy"
+)
+
+# Print the model results to see the best parameters
+print(rf_model)
+
+
+```
+
+### 7.4.2. Model 2: SVM
+
+**Kernel 1:** Radial
+
+```{r SVM Radial}
+# Define the tuning grid for svmRadial
+svm_tune_grid <- expand.grid(
+  sigma = c(0.001,0.01),
+  C = c(10, 100, 1000)
+)
+
+# Train the SVM model using the radial basis function kernel
+svm_model <- train(
+  genre ~ ., 
+  data = train_data_updated,
+  method = "svmRadial",  
+  trControl = control,
+  tuneGrid = svm_tune_grid,
+  preProcess = "scale"  # Automatically scales features for SVM
+)
+
+# Print the model results to view the best parameters and accuracy
+print(svm_model)
+
+```
+
+**Kernel 2:** Polynomial
+
+```{r SVM Poly}
+# Define the tuning grid for svmPoly
+svm_poly_tune_grid <- expand.grid(
+  degree = 2,  
+  scale = c(0.01,0.1,1),  
+  C = c(5,10)  
+)
+
+
+# Train the SVM model using the polynomial kernel
+svm_poly_model <- train(
+  genre ~ ., 
+  data = train_data_updated,
+  method = "svmPoly",  
+  trControl = control,
+  tuneGrid = svm_poly_tune_grid,
+  preProcess = "scale"  # Automatically scales features for SVM
+)
+
+# Print the model results to view the best parameters and accuracy
+print(svm_poly_model)
+
+```
+
+In our SVM model comparison, the Radial Basis Function (RBF) kernel
+outperformed the Polynomial kernel in accuracy, indicating better
+generalization to our music genre classification dataset. The radial
+kernel's flexibility in handling complex data structures makes it more
+effective for our application, leading us to choose it for its superior
+performance and adaptability.
+
+### 7.4.3. Model 3: Neural Network
+
+```{r NN}
+
+# Define the tuning grid
+nn_tune_grid <- expand.grid(size = c(5, 10, 15),
+                            decay = c(0.001, 0.01, 0.1))
+
+# Train the model with tuning
+nn_model <- train(genre ~ ., 
+                  data = train_data_updated,
+                  method = "nnet",  # Ensure to use method 'nnet' for neural networks in caret
+                  trControl = control,
+                  tuneGrid = nn_tune_grid,
+                  MaxNWts = 1000,   # Maximum allowable weights (to avoid overly complex models)
+                  trace = FALSE,    # Optionally turn off training progress
+                  linout = FALSE,
+                  maxit = 500)
+
+# View the results
+print(nn_model)
+
+```
+
+## 7.4 Model Evaluation
+
+```{r warning=FALSE}
+# Random Forest Prediction and Evaluation
+rf_predictions <- predict(rf_model, newdata = test_data_updated)
+rf_accuracy <- mean(rf_predictions == test_data_updated$genre)
+cm_rf <- confusionMatrix(rf_predictions, test_data_updated$genre)
+
+# SVM Radial Prediction and Evaluation
+svm_radial_predictions <- predict(svm_model, newdata = test_data_updated)
+svm_radial_accuracy <- mean(svm_radial_predictions == test_data_updated$genre)
+cm_svm <- confusionMatrix(svm_radial_predictions, test_data_updated$genre)
+
+
+# Neural Network Prediction and Evaluation
+nn_predictions <- predict(nn_model, newdata = test_data_updated)
+nn_accuracy <- mean(nn_predictions == test_data_updated$genre)
+cm_nn <- confusionMatrix(nn_predictions, test_data_updated$genre)
+
+```
+
+```{r Accuracy Comparison}
+# Create a data frame to compare model performance
+model_comparison <- data.frame(
+  Model = c("Random Forest", "SVM Radial", "Neural Network"),
+  Accuracy = c(rf_accuracy, svm_radial_accuracy, nn_accuracy)
+)
+
+# Print the comparison table
+print(model_comparison)
+
+# Plot the accuracy of each model
+library(ggplot2)
+ggplot(model_comparison, aes(x = Model, y = Accuracy, fill = Model)) +
+  geom_bar(stat = "identity", position = position_dodge(), width = 0.7) +
+  geom_text(aes(label = sprintf("%.2f", Accuracy)), vjust = -0.5, size = 3.5) +
+  labs(title = "Comparison of Model Accuracies", x = "Model", y = "Accuracy") +
+  theme_minimal() +
+  scale_fill_brewer(palette = "Set1") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+```
+
+This simple table presents the overall accuracy of the three models.
+Although the accuracy rates are somewhat close, the slight advantage of
+the Random Forest model could generally provide a more robust prediction
+by reducing the likelihood of overfitting.
+
+```{r Balanced Accuracy}
+# Combine balanced accuracy data from different models
+df_balanced_accuracy_rf <- data.frame(Class = rownames(cm_rf$byClass), Balanced_Accuracy = cm_rf$byClass[,"Balanced Accuracy"], Model = "Random Forest")
+df_balanced_accuracy_svm <- data.frame(Class = rownames(cm_svm$byClass), Balanced_Accuracy = cm_svm$byClass[,"Balanced Accuracy"], Model = "SVM")
+df_balanced_accuracy_nn <- data.frame(Class = rownames(cm_nn$byClass), Balanced_Accuracy = cm_nn$byClass[,"Balanced Accuracy"], Model = "Neural Network")
+
+combined_balanced_accuracy <- rbind(df_balanced_accuracy_rf, df_balanced_accuracy_svm, df_balanced_accuracy_nn)
+
+# Visualize the balanced accuracy for each class and model
+library(ggplot2)
+ggplot(combined_balanced_accuracy, aes(x = Class, y = Balanced_Accuracy, fill = Model)) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.8), width = 0.7) +
+  geom_text(aes(label = sprintf("%.2f", Balanced_Accuracy)), position = position_dodge(width = 0.8), vjust = -0.5, size = 3) +
+  theme_minimal() +
+  labs(title = "Balanced Accuracy by Class and Model", y = "Balanced Accuracy (%)", x = "Class") +
+  scale_fill_brewer(palette = "Set1") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+**Balanced Accuracy by Class and Model:** This bar chart compares the
+balanced accuracy of three different machine learning models - Neural
+Network, Random Forest, and SVM (Support Vector Machine) - for
+predicting different music genres. The chart indicates that genres like
+electronic and hip-hop have distinguishing features that are captured
+well by the models, while other genres might be more challenging to
+differentiate due to overlapping characteristics or less distinct
+features.
+
+# 8. Conclusion
+
+Our project undertook an innovative task where we utilized Spotify's
+audio features to predict song popularity and genre, demonstrating the
+intersection of musicology and data science. Through extensive data
+preprocessing, exploratory data analysis (EDA), and model building, we
+identified certain audio features that indicate song popularity and
+genre classification. Exploratory data analysis (EDA) reveals the
+distribution of features such as danceability, energy, and acousticity
+across genres, while regression and classification models attempt to
+quantify these relationships. In terms of predicting song popularity,
+our work highlights the challenges of modeling with diverse datasets, as
+evidenced by the range of performance of the models and their predictive
+accuracy. The models achieved varying degrees of success, with Random
+Forests and Generalized Linear Models (GLMs) showing potential in
+capturing the complex dynamics that lead to song popularity on Spotify.
+Further work needs to be conducted regarding the specificity and
+sensitivity of these two models. Improving false positive will be a
+potential topic of our next stage. In terms of genre classification, our
+innovative approach to feature selection and engineering (e.g., creating
+interaction terms and normalizing selected features) paved the way for
+building nuanced models that are able to distinguish between genres with
+reasonable accuracy. The application of models such as Random Forests,
+SVMs, and Neural Networks in predicting genres illustrates a
+comprehensive attempt to leverage Spotify's rich dataset to understand
+music trends.
+
+# 9. Future Work
+
+[Enhanced Feature Engineering]{.underline}: We might try to explore
+deeper into creating more complex interaction terms and investigating
+unsupervised learning techniques for feature extraction.Maybe we could
+uncover hidden patterns within the audio features which significantly
+impact both genre classification and song popularity.
+
+[Model Exploration and Optimization]{.underline}:We will also try to
+experiment with advanced modeling techniques, including some ensemble
+methods for sequential analysis of songs.
+
+[Handling Class Imbalance]{.underline}: We will consider resampling
+Techniques like Oversampling or undersampling. Aim tp mitigate the
+impact of imbalance and improve the performance of our models.
+
+[User-Centric Applications]{.underline}: Last but not least, we might
+explore the development of user-centric applications such as
+personalized song recommendations and dynamic genre classification
+tools. In this way, we could leverage the insights and models developed
+in this project to enhance music discovery and curation on streaming
+platforms.
